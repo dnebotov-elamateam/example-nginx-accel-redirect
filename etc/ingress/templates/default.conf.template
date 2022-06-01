@@ -1,0 +1,24 @@
+# Lua configuration
+lua_package_path    "$prefix/?.lua;;";
+lua_shared_dict     log_dict    1M;
+
+server {
+  listen       80;
+  server_name  ingress;
+
+  location / {
+    proxy_pass http://api-gateway:9090;
+  }
+
+  location /internal/report-files/ {
+    internal;
+    access_log /dev/stdout;
+
+    proxy_buffering off;
+    proxy_set_header Authorization "$http_x_authorization";
+    proxy_pass http://s3:9000/;
+
+    add_header Content-Disposition attachment;
+    add_header Content-Disposition filename="$http_x_filename";
+  }
+}
