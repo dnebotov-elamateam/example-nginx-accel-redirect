@@ -2,28 +2,38 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gorilla/mux"
+	minio "github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"golang.org/x/sync/errgroup"
 )
 
 func main() {
+	s3AccessKey := os.Getenv("S3_ACCESS_KEY")
+	s3SecretKey := os.Getenv("S3_SECRET_KEY")
+
 	ctx := context.Background()
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	httpEntrypoint := newEntrypoint()
+	client, err := minio.New("s3:9000", &minio.Options{
+		Creds: credentials.NewStaticV4(s3AccessKey, s3SecretKey, ""),
+	})
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	httpEntrypoint := newEntrypoint(client)
 	httpRouter := mux.NewRouter()
 	httpEntrypoint.Registration(httpRouter)
 
@@ -44,16 +54,15 @@ func main() {
 }
 
 type entrypoint struct {
-	s3AccessKey string
-	s3SecretKey string
-	filePath    string
+	s3Client *minio.Client
+
+	filePath string
 }
 
-func newEntrypoint() *entrypoint {
+func newEntrypoint(s3Client *minio.Client) *entrypoint {
 	return &entrypoint{
-		s3AccessKey: os.Getenv("S3_ACCESS_KEY"),
-		s3SecretKey: os.Getenv("S3_SECRET_KEY"),
-		filePath:    os.Getenv("S3_FILE_PATH"),
+		s3Client: s3Client,
+		filePath: os.Getenv("S3_FILE_PATH"),
 	}
 }
 
@@ -64,38 +73,21 @@ func (e *entrypoint) Registration(router *mux.Router) {
 func (e *entrypoint) reportFile(rw http.ResponseWriter, r *http.Request) {
 	log.Println("INCOMING:", r.URL.String())
 
-	accelRedirect := "/internal/report-files" + e.filePath
-	_, filename := filepath.Split(e.filePath)
-	ext := filepath.Ext(filename)
-	date := time.Now().Format(time.RFC1123Z)
-	var contentType string
+	splitIndex := strings.Index(e.filePath, "/")
 
-	switch ext {
-	case "xlsx":
-		contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	bucket := e.filePath[:splitIndex]
+	objectName := e.filePath[splitIndex+1:]
+	fmt.Println(bucket, objectName)
+
+	u, err := e.s3Client.PresignedGetObject(r.Context(), bucket, objectName, time.Minute, url.Values{})
+	if err != nil {
+		log.Fatalln(err)
 	}
 
-	signaturePayload := fmt.Sprintf(
-		"GET\n\n%s\n\nx-amz-date:%s\n%s",
-		contentType,
-		date,
-		e.filePath,
-	)
-	signature := GetSignature(signaturePayload, e.s3SecretKey)
-	authorization := fmt.Sprintf("AWS4 %s:%s", e.s3AccessKey, signature)
+	accelRedirect := "/internal/report-files" + u.Path + "?" + u.RawQuery
 
-	log.Println("OUTGOING:", "X-Accel-Redirect", accelRedirect, "X-Authorization", authorization, "X-Filename", filename)
+	log.Println("URL:", accelRedirect)
 
 	headers := rw.Header()
 	headers.Add("X-Accel-Redirect", accelRedirect)
-	headers.Add("X-Authorization", authorization)
-	headers.Add("X-Filename", filename)
-}
-
-func GetSignature(input, key string) string {
-	keyForSign := []byte(key)
-	h := hmac.New(sha256.New, keyForSign)
-	h.Write([]byte(input))
-
-	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
