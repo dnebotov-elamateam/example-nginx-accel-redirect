@@ -11,6 +11,7 @@ server {
     access_log /dev/stdout;
 
     proxy_buffering off;
-    proxy_pass http://s3:9000/;
+    #proxy_pass http://s3:9000/;
+    proxy_pass http://storage.yandexcloud.net/;
   }
 }

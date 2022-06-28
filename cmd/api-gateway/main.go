@@ -21,13 +21,19 @@ import (
 func main() {
 	s3AccessKey := os.Getenv("S3_ACCESS_KEY")
 	s3SecretKey := os.Getenv("S3_SECRET_KEY")
+	s3Address := os.Getenv("S3_ADDRESS")
+
+	log.Println(s3AccessKey)
+	log.Println(s3SecretKey)
+	log.Println(s3Address)
 
 	ctx := context.Background()
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 
-	client, err := minio.New("s3:9000", &minio.Options{
-		Creds: credentials.NewStaticV4(s3AccessKey, s3SecretKey, ""),
+	client, err := minio.New(s3Address, &minio.Options{
+		Creds:  credentials.NewStaticV4(s3AccessKey, s3SecretKey, ""),
+		Secure: true,
 	})
 	if err != nil {
 		log.Fatalln(err)
